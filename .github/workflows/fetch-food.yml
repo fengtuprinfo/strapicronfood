@@ -2,7 +2,8 @@ name: Fetch Strapi Food
 
 on:
   schedule:
-    - cron: "0 */1 * * *" # 建議改為每小時執行一次，原先的 */55 可能過於頻繁
+    # 每小時的第 55 分執行
+    - cron: "*/55 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -33,32 +34,19 @@ jobs:
           import fetch from "node-fetch";
           import fs from "fs";
 
-          const baseUrl = (process.env.STRAPI_URL || "").replace(/\/$/, "");
-          const url = `${baseUrl}/api/foods?populate=photo`;
-          const headers = { 
-            Authorization: `Bearer ${process.env.STRAPI_TOKEN}`,
-            Accept: "application/json"
-          };
+          const url = `${process.env.STRAPI_URL}/api/foods?populate=photo`;
+          const headers = { Authorization: `Bearer ${process.env.STRAPI_TOKEN}` };
 
           console.log("Fetching from:", url);
 
           try {
             const res = await fetch(url, { headers });
-            const text = await res.text();
-            
-            if (!res.ok) {
-              console.error(`HTTP Error: ${res.status}\nContent: ${text.substring(0, 200)}`);
-              process.exit(1);
-            }
+            if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText}`);
 
-            const data = JSON.parse(text);
+            const data = await res.json();
+            
             const foods = (data.data || []).map(item => {
-              const attrs = item.attributes || item;
-              const photoData = attrs.photo?.data || attrs.photo;
-              const photo = Array.isArray(photoData) 
-                ? photoData.map(p => p.attributes?.url || p.url || "") 
-                : (photoData ? [photoData.attributes?.url || photoData.url || ""] : []);
-              
+              const attrs = item.attributes || {};
               return {
                 id: item.id,
                 name: attrs.name || "",
@@ -66,15 +54,17 @@ jobs:
                 price: attrs.price || 0,
                 shop: attrs.shop || "",
                 todate: attrs.todate || "",
-                photo: photo.filter(Boolean),
+                photo: Array.isArray(attrs.photo?.data) 
+                  ? attrs.photo.data.map(p => p.attributes?.url || "") 
+                  : [],
                 photoHash: attrs.photoHash || ""
               };
             });
 
             fs.writeFileSync("food.json", JSON.stringify(foods, null, 2));
-            console.log(`Success: ${foods.length} items saved.`);
+            console.log("food.json generated successfully.");
           } catch (error) {
-            console.error("Script Error:", error.message);
+            console.error("Error executing script:", error);
             process.exit(1);
           }
           '
@@ -84,6 +74,7 @@ jobs:
           git config --global user.name "github-actions"
           git config --global user.email "github-actions@github.com"
           
+          # 檢查是否有檔案變更 (使用 git status)
           if [[ -n $(git status -s food.json) ]]; then
             git add food.json
             git commit -m "Update food.json [skip ci]"
