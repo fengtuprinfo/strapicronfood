@@ -1,77 +1,54 @@
-import fetch from "node-fetch";
-import fs from "fs";
+      - name: Fetch food from Strapi
+        env:
+          STRAPI_URL: ${{ secrets.STRAPI_URL }}
+          STRAPI_TOKEN: ${{ secrets.STRAPI_TOKEN }}
+        run: |
+          node --input-type=module -e '
+          import fetch from "node-fetch";
+          import fs from "fs";
 
-async function run() {
-  // 模擬環境變數，實際使用時由 GitHub Actions 提供
-  const STRAPI_URL = process.env.STRAPI_URL?.replace(/\/$/, ""); // 移除結尾斜線
-  const STRAPI_TOKEN = process.env.STRAPI_TOKEN;
-  
-  if (!STRAPI_URL) {
-    console.error("Error: STRAPI_URL is not defined");
-    process.exit(1);
-  }
+          const baseUrl = process.env.STRAPI_URL.replace(/\/$/, "");
+          const url = `${baseUrl}/api/foods?populate=photo`;
+          const headers = { 
+            Authorization: `Bearer ${process.env.STRAPI_TOKEN}`,
+            Accept: "application/json"
+          };
 
-  const url = `${STRAPI_URL}/api/foods?populate=photo`;
-  const headers = { 
-    "Authorization": `Bearer ${STRAPI_TOKEN}`,
-    "Accept": "application/json" // 明確要求 JSON
-  };
+          console.log("Fetching from:", url);
 
-  console.log("Fetching from:", url);
+          try {
+            const res = await fetch(url, { headers });
+            const text = await res.text();
+            
+            if (!res.ok) {
+              console.error(`HTTP Error: ${res.status}\nContent: ${text.substring(0, 200)}`);
+              process.exit(1);
+            }
 
-  try {
-    const res = await fetch(url, { headers });
-    
-    // 取得回應內容文字，以便在出錯時診斷
-    const text = await res.text();
-    
-    if (!res.ok) {
-      console.error(`Fetch failed: ${res.status} ${res.statusText}`);
-      console.error("Response body snippet:", text.substring(0, 200));
-      process.exit(1);
-    }
+            const data = JSON.parse(text);
+            const foods = (data.data || []).map(item => {
+              const attrs = item.attributes || item;
+              const photoData = attrs.photo?.data || attrs.photo;
+              const photo = Array.isArray(photoData) 
+                ? photoData.map(p => p.attributes?.url || p.url || "") 
+                : (photoData ? [photoData.attributes?.url || photoData.url || ""] : []);
+              
+              return {
+                id: item.id,
+                name: attrs.name || "",
+                amount: attrs.amount || 0,
+                price: attrs.price || 0,
+                shop: attrs.shop || "",
+                todate: attrs.todate || "",
+                photo: photo.filter(Boolean),
+                photoHash: attrs.photoHash || ""
+              };
+            });
 
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      console.error("Failed to parse JSON. Received content starts with:", text.substring(0, 100));
-      process.exit(1);
-    }
-    
-    // 處理 Strapi v4 (data.data[i].attributes) 與 v5 (data.data[i]) 的差異
-    const foods = (data.data || []).map(item => {
-      // 如果有 attributes 則是 v4，否則直接取 item (v5)
-      const attrs = item.attributes || item;
-      
-      // 處理圖片：Strapi v4/v5 的結構可能不同
-      let photoUrls = [];
-      const photoData = attrs.photo?.data || attrs.photo; // v4 是 .data, v5 可能直接是物件/陣列
-      
-      if (Array.isArray(photoData)) {
-        photoUrls = photoData.map(p => (p.attributes?.url || p.url || ""));
-      } else if (photoData) {
-        photoUrls = [photoData.attributes?.url || photoData.url || ""];
-      }
-
-      return {
-        id: item.id,
-        name: attrs.name || "",
-        amount: attrs.amount || 0,
-        price: attrs.price || 0,
-        shop: attrs.shop || "",
-        todate: attrs.todate || "",
-        photo: photoUrls.filter(url => url !== ""),
-        photoHash: attrs.photoHash || ""
-      };
-    });
-
-    fs.writeFileSync("food.json", JSON.stringify(foods, null, 2));
-    console.log(`food.json generated successfully with ${foods.length} items.`);
-  } catch (error) {
-    console.error("Error executing script:", error);
-    process.exit(1);
-  }
-}
-
-run();
+            fs.writeFileSync("food.json", JSON.stringify(foods, null, 2));
+            console.log(`Success: ${foods.length} items saved.`);
+          } catch (error) {
+            console.error("Script Error:", error.message);
+            process.exit(1);
+          }
+          '
